@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import pygame
 import sys
 import math
@@ -13,6 +15,7 @@ pygame.mixer.init()
 WINDOW_WIDTH = 1024
 WINDOW_HEIGHT = 768
 FPS = 60
+RESULT_DISPLAY_TIME = 5 * FPS  # 5 seconds at 60 FPS
 
 # Colors
 WHITE = (255, 255, 255)
@@ -350,11 +353,28 @@ class Game:
         self.current_planet = self.planets[self.selected_planet_index]
         self.spacecraft = Spacecraft(WINDOW_WIDTH//4, 100)  # Start from left side
         
+        # Result display timers
+        self.result_timer = 0
+        
+        # Aperture effect variables
+        self.aperture_size = 0  # 0 = closed, 1 = fully open
+        self.aperture_direction = 1  # 1 = opening, -1 = closing
+        self.aperture_pause = 0  # Counter for pause when fully open
+        self.aperture_pause_duration = int(0.5 * FPS)  # 0.5 seconds at 60 FPS
+        
+        # Make the aperture animation faster (open/close in 1 second)
+        self.aperture_speed = 1.0 / (FPS * 1.0)  # Adjust speed for smoother animation
+        
         # Load sounds
         self.thrust_sound = None
         self.crash_sound = None
         self.victory_sound = None
         self.load_sounds()
+        
+        # Load result images
+        self.winning_image = None
+        self.losing_image = None
+        self.load_images()
 
     def load_sounds(self):
         try:
@@ -363,6 +383,55 @@ class Game:
             self.victory_sound = pygame.mixer.Sound("assets/victory.wav")
         except:
             print("Warning: Sound files not found")
+            
+    def load_images(self):
+        # Try to load winning image, or create a placeholder
+        try:
+            self.winning_image = pygame.image.load("assets/winning.png")
+            self.winning_image = pygame.transform.scale(self.winning_image, (WINDOW_WIDTH, WINDOW_HEIGHT))
+            print("Loaded winning.png successfully")
+        except:
+            print("Warning: winning.png not found, creating placeholder")
+            # Create a placeholder winning image
+            self.winning_image = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+            self.winning_image.fill((0, 100, 0))  # Dark green background
+            
+            # Add text to the placeholder
+            font_big = pygame.font.Font(None, 100)
+            text = font_big.render("PERFECT LANDING!", True, WHITE)
+            text_rect = text.get_rect(center=(WINDOW_WIDTH/2, WINDOW_HEIGHT/2))
+            self.winning_image.blit(text, text_rect)
+            
+            # Add some stars
+            for _ in range(200):
+                x = random.randint(0, WINDOW_WIDTH)
+                y = random.randint(0, WINDOW_HEIGHT)
+                pygame.draw.circle(self.winning_image, WHITE, (x, y), random.randint(1, 3))
+            
+        # Try to load losing image, or create a placeholder
+        try:
+            self.losing_image = pygame.image.load("assets/losing.png")
+            self.losing_image = pygame.transform.scale(self.losing_image, (WINDOW_WIDTH, WINDOW_HEIGHT))
+            print("Loaded losing.png successfully")
+        except:
+            print("Warning: losing.png not found, creating placeholder")
+            # Create a placeholder losing image
+            self.losing_image = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+            self.losing_image.fill((100, 0, 0))  # Dark red background
+            
+            # Add text to the placeholder
+            font_big = pygame.font.Font(None, 100)
+            text = font_big.render("CRASH!", True, WHITE)
+            text_rect = text.get_rect(center=(WINDOW_WIDTH/2, WINDOW_HEIGHT/2))
+            self.losing_image.blit(text, text_rect)
+            
+            # Add some explosion particles
+            for _ in range(100):
+                x = random.randint(0, WINDOW_WIDTH)
+                y = random.randint(0, WINDOW_HEIGHT)
+                size = random.randint(2, 8)
+                color = (random.randint(200, 255), random.randint(100, 200), 0)
+                pygame.draw.circle(self.losing_image, color, (x, y), size)
 
     def handle_input(self):
         for event in pygame.event.get():
@@ -379,8 +448,10 @@ class Game:
                     elif self.state == GameState.PLAYING:
                         self.spacecraft.parachute_deployed = True
                     elif self.state in [GameState.VICTORY, GameState.GAME_OVER]:
-                        self.state = GameState.PLANET_SELECT
-                        self.spacecraft = Spacecraft(WINDOW_WIDTH//4, 100)
+                        # Only allow returning to planet selection if the result timer is done
+                        if self.result_timer <= 0:
+                            self.state = GameState.PLANET_SELECT
+                            self.spacecraft = Spacecraft(WINDOW_WIDTH//4, 100)
                 elif event.key == pygame.K_ESCAPE:
                     if self.state == GameState.PLANET_SELECT:
                         self.state = GameState.MENU
@@ -401,6 +472,29 @@ class Game:
         return True
 
     def update(self):
+        # Update result timer if active
+        if self.result_timer > 0:
+            self.result_timer -= 1
+            
+            # Update aperture animation
+            if self.aperture_direction == 1 and self.aperture_size < 1.0:
+                # Opening animation
+                self.aperture_size += self.aperture_speed
+                if self.aperture_size >= 1.0:
+                    self.aperture_size = 1.0
+                    self.aperture_pause = self.aperture_pause_duration
+            elif self.aperture_direction == 1 and self.aperture_size == 1.0:
+                # Pause when fully open
+                if self.aperture_pause > 0:
+                    self.aperture_pause -= 1
+                else:
+                    self.aperture_direction = -1
+            elif self.aperture_direction == -1 and self.aperture_size > 0:
+                # Closing animation
+                self.aperture_size -= self.aperture_speed
+                if self.aperture_size <= 0:
+                    self.aperture_size = 0
+            
         if self.state == GameState.PLAYING:
             self.spacecraft.apply_thrust()
             landing_status = self.spacecraft.update(self.current_planet)
@@ -409,10 +503,20 @@ class Game:
             if landing_status is not None:  # We've hit the ground
                 if landing_status:  # Safe landing
                     self.state = GameState.VICTORY
+                    self.result_timer = RESULT_DISPLAY_TIME
+                    # Reset aperture effect for opening animation
+                    self.aperture_size = 0
+                    self.aperture_direction = 1
+                    self.aperture_pause = 0
                     if self.victory_sound:
                         self.victory_sound.play()
                 else:  # Crash
                     self.state = GameState.GAME_OVER
+                    self.result_timer = RESULT_DISPLAY_TIME
+                    # Reset aperture effect for opening animation
+                    self.aperture_size = 0
+                    self.aperture_direction = 1
+                    self.aperture_pause = 0
                     if self.crash_sound:
                         self.crash_sound.play()
 
@@ -456,8 +560,53 @@ class Game:
             self.screen.blit(text, text_rect)
             y += 30
 
+    def draw_aperture_effect(self, image):
+        """Draw an image with an aperture effect opening/closing from center"""
+        if self.aperture_size <= 0:
+            # Draw nothing if completely closed (black screen)
+            return
+        
+        # Calculate aperture dimensions
+        max_radius = int(math.sqrt(WINDOW_WIDTH**2 + WINDOW_HEIGHT**2) / 2)
+        current_radius = int(max_radius * self.aperture_size)
+        
+        # Debug info
+        print(f"Aperture size: {self.aperture_size}, Radius: {current_radius}")
+        
+        # Create a circular mask to reveal the image
+        mask = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+        mask.fill(BLACK)  # Fill with black
+        
+        # Draw a circular window in the mask
+        pygame.draw.circle(mask, WHITE, (WINDOW_WIDTH//2, WINDOW_HEIGHT//2), current_radius)
+        
+        # Draw the image and apply the circular mask
+        self.screen.blit(image, (0, 0))
+        self.screen.blit(mask, (0, 0), special_flags=pygame.BLEND_MULT)
+    
     def draw_game_over(self):
-        # Draw semi-transparent overlay
+        # If we have a losing image and the timer is active, show it with aperture effect
+        if self.losing_image and self.result_timer > 0:
+            self.draw_aperture_effect(self.losing_image)
+            return
+        
+        # If no image is available but timer is active, create a fallback surface with text
+        elif self.result_timer > 0:
+            # Create a fallback surface
+            fallback_surface = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+            fallback_surface.fill(BLACK)
+            
+            # Add text to the fallback surface
+            font_big = pygame.font.Font(None, 100)
+            text = font_big.render("CRASH!", True, RED)
+            text_rect = text.get_rect(center=(WINDOW_WIDTH/2, WINDOW_HEIGHT/2))
+            fallback_surface.blit(text, text_rect)
+            
+            # Apply aperture effect to the fallback surface
+            self.draw_aperture_effect(fallback_surface)
+            return
+            
+        # Draw semi-transparent overlay for normal game over screen (after timer)
         overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 128))  # Semi-transparent black
         self.screen.blit(overlay, (0, 0))
@@ -480,11 +629,34 @@ class Game:
         detail_rect = detail_text.get_rect(center=(WINDOW_WIDTH/2, WINDOW_HEIGHT/2))
         self.screen.blit(detail_text, detail_rect)
         
-        text = font.render("Press SPACE to Try Again", True, WHITE)
-        text_rect = text.get_rect(center=(WINDOW_WIDTH/2, WINDOW_HEIGHT/2 + 50))
-        self.screen.blit(text, text_rect)
+        # Only show "Press SPACE" after result timer is done
+        if self.result_timer <= 0:
+            text = font.render("Press SPACE to Try Again", True, WHITE)
+            text_rect = text.get_rect(center=(WINDOW_WIDTH/2, WINDOW_HEIGHT/2 + 50))
+            self.screen.blit(text, text_rect)
 
     def draw_victory(self):
+        # If we have a winning image and the timer is active, show it with aperture effect
+        if self.winning_image and self.result_timer > 0:
+            self.draw_aperture_effect(self.winning_image)
+            return
+        
+        # If no image is available but timer is active, create a fallback surface with text
+        elif self.result_timer > 0:
+            # Create a fallback surface
+            fallback_surface = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+            fallback_surface.fill(BLACK)
+            
+            # Add text to the fallback surface
+            font_big = pygame.font.Font(None, 100)
+            text = font_big.render("PERFECT LANDING!", True, GREEN)
+            text_rect = text.get_rect(center=(WINDOW_WIDTH/2, WINDOW_HEIGHT/2))
+            fallback_surface.blit(text, text_rect)
+            
+            # Apply aperture effect to the fallback surface
+            self.draw_aperture_effect(fallback_surface)
+            return
+            
         # Draw semi-transparent overlay
         overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 128))  # Semi-transparent black
@@ -502,8 +674,8 @@ class Game:
         stats_rect = stats_text.get_rect(center=(WINDOW_WIDTH/2, WINDOW_HEIGHT/2))
         self.screen.blit(stats_text, stats_rect)
         
-        # Only show "Press SPACE" after landing effect is done
-        if self.spacecraft.landing_effect_timer <= 0:
+        # Only show "Press SPACE" after result timer is done
+        if self.result_timer <= 0:
             text = font.render("Press SPACE to Play Again", True, WHITE)
             text_rect = text.get_rect(center=(WINDOW_WIDTH/2, WINDOW_HEIGHT/2 + 50))
             self.screen.blit(text, text_rect)
